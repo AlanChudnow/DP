@@ -1,0 +1,474 @@
+---
+title: "Coursara Practical Machine Learning Project - v6"
+author: "Chudnow"
+date: "June 14, 2015"
+output: html_document
+---
+
+## 1. Executive Summary
+
+Data sets relating to human activity recognition were examined to develop algorithms to recognize if a weight lifting exercises is being done correctly (classe="A") or identify how it is being done improperly (class="B"). 
+
+After partioning the training data set into 60% training, 20% testing/probe, and 20% quiz/validation data sets, I examined the training data to see if any patterns could be found to assist in training. No clear patterns where found in any particular single column.  Using a PCA analysis it two dimensions revealed clear clustering by `user_name` but no clear `classe` clusters.  A 3 dimensional PCA analysis did show clustering by `classe`
+
+I trained several different machine learning algorithms, with the following results.  Accuracy meausrements are based upon  `confusionMatrix` Overall Statistics / Accuracy output.  These accuracies reflect a preliminary out-of-sample results because they are taken from data outside the training set.  Comparable out-of-sample results are shown in Section 3 using the Quiz set.
+```
+   Algorithm                     Accuracy  Comments
+   ----------------------------   -------  ---------------
+    K-Nearest Neighbors (KNN-N0)   0.97    Scale to N(0,1) K = 3
+    KNN_Min Max (KNN-MM)           0.94    Scale min to 0, max to 1, k=1
+    Naive Bayes                    0.49
+    Log.Regression                 0.74 
+    Linear Discriminant Analysis   0.69 
+    Partial Least Squared Dis.     0.39
+```
+To determine the best value for K, the KNN algorithm was looped a number of times.  In the data set provided, the best K values were small.  I am concerned that this approach may not work with other data sets because it may be very much over-fitting the data.  I do not expect that this will be a problem with the unknown TEST data set because it is taken from the same set of users as the training data. 
+
+For cross validation,  KNN-N0 results were trained on one data set, probed using a test data set and verified on a quiz data set.  These results were repeated with comparable results using different seed values to repartition the test and training sets.  Validation against the quiz was performed only once.
+
+## 2. Approach
+
+This secion provides a quick overview of the approach taken to clean the data. To save word count, not all R code is provided in the HTML file. But it is the RMD file.
+
+### 2a. Read in Data 
+
+Raw data was captured on disk and read into the file.
+
+```{r, echo=FALSE}
+library(caret)
+
+SeedVersion <- 531
+
+fn_Train <- "pml-training.csv"
+fn_Test <- "pml-testing.csv"
+
+df_rawTrain <-read.csv(fn_Train)  #Raw data directly from file
+df_rawTest <- read.csv(fn_Test)   #Raw test data directly from file
+```
+
+### 2b. Preliminary Exploration and Data Cleaning
+
+An examination of the data shows that the training set had a number of factors that I didn't need to carry around for testing and training. Examples include:
+
+* Col 1 Index (not relevant)
+* Col 2 user_name (not relevant)
+* Col 3:7 time and window number (not relevant)
+* Col 12 kurosis (Almost all blank)
+* Col 18 max_roll (almost all NA)
+* etc
+
+```{r, echo=FALSE}
+library(caret)
+
+#Can I get rid of any columns first that don't change much
+nzv <- nearZeroVar(df_rawTrain,saveMetrics=TRUE)
+dropCol <- nzv$nzv
+
+#Get rid of the first 7 columns are just indexes
+dropCol[1:7] <- TRUE
+
+#Identify and get rid of columns that are almost all NAs
+countNA <- apply(df_rawTrain,2,function(x) {sum(is.na(x))})
+dropNA <- countNA>(0.9*dim(df_rawTrain)[1])
+
+dropCol[dropNA] <- TRUE
+
+cleanPivot <- function(bigdf,dropCol){
+    #This function will drop all the cols in my table
+    #It will move the last col to be the first column
+    sdf0 <- bigdf[,dropCol==FALSE]
+    last <- length(sdf0)
+    sdf1 <- data.frame(classe=sdf0[,last], sdf0[,1:(last-1)])
+    return(sdf1)
+}
+
+df_train0 <- cleanPivot(df_rawTrain,dropCol) #Cleaned Training Set
+df_TEST0 <- cleanPivot(df_rawTest, dropCol)  #Cleaned Final Test Set
+```
+
+We removed the less useful columns to simplify and speed analysis.  
+
+The following column numbers remain:    `r colnames(df_TEST0)`
+
+### 2c. Create Training/Test and Quiz Set for Cross-Validation
+
+Training data is split into three sets
+
+1. 60% Training - Data for machine learning (ML) algorithms 
+2. 20% Test set - Set to probe /  test specific ML algorithms and settings
+3. 20% Quiz set - Set to validate algorithms after final selection (out of sample)
+
+This worksheet is set up so that training and test sets can be randomly reassigned by changing a global `SeedVersion` value in the first block. The experiment has been run several time, shuffeling rows into  test and training sets, but leaving the Quiz set as is. Results are not shown but can be reproduced by changing data set.
+
+```{r, echo=FALSE}
+
+set.seed(135)
+inTrain <- createDataPartition(df_train0[,1], p = 0.8)[[1]]
+
+#Partion Data into BigTrain is for Training; quizing is for Validation
+BigTrain   <- df_train0[ inTrain,];   quizing <- df_train0[-inTrain,]
+BigTrain_u <- df_rawTrain[inTrain,2]; quiz_u  <- df_rawTrain[-inTrain,2]
+BigTrain_c <- BigTrain[,1];           quiz_c  <- quizing[,1]
+
+#Partion BigTrain into Training and Testing data as described above
+set.seed(SeedVersion)
+inTrain <- createDataPartition(BigTrain_c, p = 0.75)[[1]]
+
+training <-BigTrain[ inTrain,];   testing <- BigTrain[-inTrain,]
+train_u <- BigTrain_u[inTrain];   test_u <- BigTrain_u[-inTrain]
+train_c <- training[,1];          test_c <- testing[,1]
+
+colmax <- dim(training)[2]
+#colnames(training)
+
+```
+
+### 2d. Plot the data for each dimension vs. column and color by class
+
+Initially, I wrote scripts to examine data to see if any clear features popped out. There are no obvious single columns that correlate well with states. However, this approach did identify several rows that have clear outliers: gyros_dumbbell_x
+
+```{r, echo=FALSE, eval=FALSE}
+library(manipulate)
+
+myPlot <- function(cnum) {
+    plot(1:length(training[,cnum]),training[,cnum],
+         col=(as.numeric(training[,1])+1),
+         ylab=colnames(training)[cnum],
+         main=colnames(training)[cnum])
+}
+
+myBox <- function(cnum) {
+    plot(training[,cnum] ~ training[,1], 
+         col=(as.numeric(training[,1])+1),
+         ylab=colnames(training)[cnum],
+         main=colnames(training)[cnum])
+}
+
+#Note: These commands will allow the user rapidly graph each column.  Just cut/paste manipulate into console window (after running the R code above)
+
+#  manipulate(myPlot(cnum),cnum=slider(2,dim(training)[2],step=1))
+#  manipulate(myBox(cnum),cnum=slider(2,dim(training)[2],step=1))
+```
+
+It turns out that using an 2-D PCA analysis will form users into clusters quite readily but the relationship between different classes is not so obvious.
+
+```{r}
+set.seed(SeedVersion)
+preProc_pca2 <- preProcess(training[,-1], method="pca", pcaComp=2)
+    #preProc_pca2
+    #preProc_pca2$rotation
+
+trainP_pca2 <- predict(preProc_pca2, training[,-1])
+#    plot(trainP_pca2$PC1,trainP_pca2$PC2, col=(as.numeric(train_c)+1),
+#         main="classe vs 2D PCA shows significant overlap",
+#         xlab="PC1", ylab="PC2" )
+    plot(trainP_pca2$PC1,trainP_pca2$PC2, col=(as.numeric(train_u)+1),
+         main="Users identified by 2D PCA clusters",
+         xlab="PC1 (Color by user_name)", ylab="PC2" )
+```
+
+With a 3D PCA, there does appear to finally be a clustering of classe that we can take exploit. Unfortunately, I did not attempt to develop a ML algorithm to take advantage of these clusters
+
+```{r, echo=FALSE}
+library(plot3D)
+set.seed(SeedVersion)
+
+preProc_pca3 <- preProcess(training[,-1], method="pca", pcaComp=3)
+   # preProc_pca3  #preProc_pca3$rotation
+
+trainP_pca3 <- predict(preProc_pca3, training[,-1])
+    #plot(trainP_pca3$PC1,trainP_pca3$PC2, col=(as.numeric(test_c)+1))
+    #plot(trainP_pca3$PC2,trainP_pca3$PC3, col=(as.numeric(test_c)+1))
+    #plot(trainP_pca3$PC3,trainP_pca3$PC1, col=(as.numeric(test_c)+1))
+    scatter3D(trainP_pca3$PC1,trainP_pca3$PC2, trainP_pca3$PC3,
+              xlim=c(-8,8), ylim=c(-5,7),zlim=c(-4,8),clim=c(1,6),
+              main="3D PCA shows clustering by classe (color)",
+              col=(as.numeric(test_c)+1),phi=0,theta=10)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+my3D<- function(v_phi,v_theta) {
+    scatter3D(trainP_pca3$PC1,
+              trainP_pca3$PC2, 
+              trainP_pca3$PC3,
+              xlim=c(-8,8), ylim=c(-6,7),zlim=c(-4,8),clim=c(1,6),
+              xlab="PC1",ylab="PC2",zlab="PC3",
+              phi=v_phi,
+              theta=v_theta,
+              col=(as.numeric(train_c)+1))
+}
+    
+# manipulate(my3D(v_phi,v_theta), v_phi=slider(-90,90,step=5,initial=0), v_theta=slider(-90,90,step=5,initial=10))
+
+```
+
+### 2e. Train classifiers on "Training Data", Evaluate on "Probe Data"
+
+As described above, we evaluated a number of different approaches:
+
+* K-Nearest Neighbors (KNN-N0)
+* KNN_Min Max (KNN-MM) 
+* Naive Bayes               
+* Log.Regression                  
+* Linear Discriminant Analysis   
+* Partial Least Squared Dis.    
+
+#### K-Nearest Neighbors (KNN-N0) Results
+The approach for KNN is shown below. KNN needs a K to determine how many neighbors to evalue.   To determine the best K, we looped over a number of different values and shown in the graphics below.  Overall, we had very good results as shown.
+
+```{r}
+library (class)
+znorm <- function(x) { return ((x - mean(x)) / sd(x))}
+#x<- znorm(rnorm(10,mean=30,sd=5)); mean(x); sd(x)  #Check Code
+
+train_knnZ <- as.data.frame(lapply(training[2:colmax],znorm))
+test_knnZ <-  as.data.frame(lapply(testing[2:colmax],znorm))
+
+#Loop over different values of K to see which works best
+
+x <- c(1,2,3,4,5,6,7,8,9,10,15,25,30,40,60,80,100) #values of K
+y <- x * 0
+
+set.seed(SeedVersion)
+for(nNN in 1:length(x)){
+    knn_test_pred <- knn(train = train_knnZ, #Training Set
+                     test = test_knnZ,  #Test Data
+                     cl = train_c, #Truth Labels for Training Data
+                     k=x[nNN]) #Number of valued to compare
+    cl_knn<- confusionMatrix(test_c,knn_test_pred)
+    y[nNN] <- cl_knn$overall[1]
+}
+plot(x,y,xlab="No of Nearest Neighbors",  ylab="overall accuracy", 
+     main="KNN Algorithm Accuracy vs K for (N(0,1) Scaling)")
+#y
+kBest = x[which(y==max(y))]
+#set kBest<-3 Anyway because 1 seems overtraining
+kBest <-3
+
+knn_test_pred <- knn(train = train_knnZ, test = test_knnZ, 
+                     cl = train_c, k=kBest)
+
+cl_knn<- confusionMatrix(test_c,knn_test_pred)
+cl_knn
+#cl_knn$overall[1]
+#kBest
+
+#try it on the QUIZ SET - But Don't Look Yet
+Quiz_knnZ <- as.data.frame(lapply(quizing[2:colmax],znorm))
+knnN0_Quiz_pred <- knn(train = train_knnZ, #Training Set
+                     test = Quiz_knnZ,  #Test Data
+                     cl = train_c, #Truth Labels for Training Data
+                     k=kBest) #Number of valued to compare
+knn_cl_quiz <- confusionMatrix(quiz_c, knnN0_Quiz_pred)
+
+#Try it on the FINAL TEST SET - And Save Answers for later output
+TEST0_knnZ <- as.data.frame(lapply(df_TEST0[2:colmax],znorm))
+knnN0_TEST0_pred <- knn(train = train_knnZ, #Training Set
+                     test = TEST0_knnZ,  #Test Data
+                     cl = train_c, #Truth Labels for Training Data
+                     k=kBest) #Number of valued to compare
+```
+
+#### KNN_Min Max (KNN-MM) Results
+
+```{r, echo=FALSE}
+library (class)
+
+normalize <- function(x) { return ((x - min(x)) / (max(x) - min(x)))}
+#normalize(c(1, 2, 3, 4, 5))  #Check Code
+#normalize(c(10, 20, 30, 40, 50)) #Check Code
+
+#Create a set of scaled test/training sets for the algorithm#
+#In this case all data is between scaled to between 0 and 1
+
+train_knnMM <- as.data.frame(lapply(training[2:colmax],normalize))
+test_knnMM <-  as.data.frame(lapply(testing[2:colmax],normalize))
+#remember train_c <- training[,1]; #Labels for training
+#remember test_c <- testing[,1] #Labels for testing
+
+#Try this at a number of different nearest neighbors and pick the best
+x <- c(1,2,5,10,15,20,25,30,40,60,80,100)
+y <- x * 0
+
+set.seed(SeedVersion)
+for(nNN in 1:length(x)){
+    knn_test_pred <- knn(train = train_knnMM, #Training Set
+                     test = test_knnMM,  #Test Data
+                      cl = train_c, #Truth Labels for Training Data
+                      k=x[nNN]) #Number of valued to compare
+
+    cl_knn<- confusionMatrix(test_c,knn_test_pred)
+    y[nNN] <- cl_knn$overall[1]
+}
+
+#plot(x,y,xlab="No of nearest neighbors compared",
+#     ylab="overall accuracy",
+#     main="Effect of No of Nearest Neighbors (Min/Max Scaling)")
+#y
+
+kBest = x[which(y==max(y))]
+knn_test_pred <- knn(train = train_knnMM, #Training Set
+                     test = test_knnMM,  #Test Data
+                      cl = train_c, #Truth Labels for Training Data
+                      k=kBest) #Number of valued to compare
+
+#try it on the QUIZ SET But Don't Look Yet
+Quiz_knnMM <- as.data.frame(lapply(quizing[2:colmax],znorm))
+knnMM_Quiz_pred <- knn(train = train_knnMM, #Training Set
+                     test = Quiz_knnMM,  #Test Data
+                     cl = train_c, #Truth Labels for Training Data
+                     k=kBest) #Number of valued to compare
+
+#try it on the TEST SET But Don't Look Yet.
+TEST0_knnMM <- as.data.frame(lapply(df_TEST0[2:colmax],normalize))
+knnMM_TEST0_pred <- knn(train = train_knnMM, #Training Set
+                     test = TEST0_knnMM,  #Test Data
+                     cl = train_c, #Truth Labels for Training Data
+                     k=kBest) #Number of valued to compare
+cl_knn<- confusionMatrix(test_c,knn_test_pred)
+#cl_knn
+cl_knn$overall[1]
+
+```
+
+#### Naive Bayes Results
+
+```{r, echo=FALSE}
+require(e1071)
+
+set.seed(SeedVersion)
+m_fitBayes <- naiveBayes(classe ~ ., data=training, laplace = 0)
+bayes_test_pred <- predict(m_fitBayes,testing,type="class" ) 
+cl_bayes<- confusionMatrix(test_c,bayes_test_pred)
+#cl_bayes
+cl_bayes$overall[1]
+bayes_Quiz_pred <- predict(m_fitBayes,quizing,type="class")
+bayes_TEST0_pred <- predict(m_fitBayes,df_TEST0,type="class" )
+```
+
+#### Log.Regression Results                 
+
+```{r, echo=FALSE}
+
+library(VGAM)
+
+set.seed(SeedVersion)
+fit_vgam <- vglm(classe~., family=multinomial, data=training)
+
+#summary(fit_vgam)
+
+prob_vgam <- predict(fit_vgam, testing, type="response")
+pred_vgam <- apply(prob_vgam, 1, which.max)
+pred_vgam[which(pred_vgam=="1")] <- levels(testing$classe)[1]
+pred_vgam[which(pred_vgam=="2")] <- levels(testing$classe)[2]
+pred_vgam[which(pred_vgam=="3")] <- levels(testing$classe)[3]
+pred_vgam[which(pred_vgam=="4")] <- levels(testing$classe)[4]
+pred_vgam[which(pred_vgam=="5")] <- levels(testing$classe)[5]
+
+cl_vgam<- confusionMatrix(test_c,pred_vgam)
+#cl_vgam
+cl_vgam$overall[1]
+
+pq_vgam <- predict(fit_vgam, quizing ,type="response")
+vgam_quiz_pred <- apply(pq_vgam, 1, which.max)
+vgam_quiz_pred[which(vgam_quiz_pred=="1")] <- levels(testing$classe)[1]
+vgam_quiz_pred[which(vgam_quiz_pred=="2")] <- levels(testing$classe)[2]
+vgam_quiz_pred[which(vgam_quiz_pred=="3")] <- levels(testing$classe)[3]
+vgam_quiz_pred[which(vgam_quiz_pred=="4")] <- levels(testing$classe)[4]
+vgam_quiz_pred[which(vgam_quiz_pred=="5")] <- levels(testing$classe)[5]
+
+pTEST0_vgam <- predict(fit_vgam, df_TEST0 ,type="response")
+vgam_TEST0_pred <- apply(pTEST0_vgam, 1, which.max)
+vgam_TEST0_pred[which(vgam_TEST0_pred=="1")] <- levels(testing$classe)[1]
+vgam_TEST0_pred[which(vgam_TEST0_pred=="2")] <- levels(testing$classe)[2]
+vgam_TEST0_pred[which(vgam_TEST0_pred=="3")] <- levels(testing$classe)[3]
+vgam_TEST0_pred[which(vgam_TEST0_pred=="4")] <- levels(testing$classe)[4]
+vgam_TEST0_pred[which(vgam_TEST0_pred=="5")] <- levels(testing$classe)[5]
+
+```
+
+#### Linear Discriminant Analysis Results
+
+```{r, echo=FALSE}
+library(MASS)
+
+set.seed(SeedVersion)
+fit_lda <- lda(classe~., data=training)
+#summary(fit_lda)
+pred_lda <- predict(fit_lda, testing)$class
+cl_lda<- confusionMatrix(test_c,pred_lda)
+#cl_lda
+cl_lda$overall[1]
+
+lda_quiz_pred <- predict(fit_lda,quizing)$class
+lda_TEST0_pred <- predict(fit_lda, df_TEST0)$class
+```
+
+#### Partial Least Squared Dis. 
+
+```{r}
+library(caret)
+
+train_plsda <- training[,2:colmax]
+test_plsda <- testing[,2:colmax]
+
+set.seed(SeedVersion)
+fit_plsda <- plsda(train_plsda,train_c, probMethod="Bayes")
+pred_plsda <- predict(fit_plsda, test_plsda)
+cl_plsda<- confusionMatrix(test_c,pred_plsda)
+#cl_plsda
+cl_plsda$overall[1]
+```
+
+## 3. Results, Cross-Validation, and Out of Sample Error
+
+### 3a. Out-of-Sample Error / Validate the best algorithm on quiz data
+
+The best algorithm was the KNN algorithm using N(0,1) scaling.  We evaluate the results on the quiz data set.
+
+```{r}
+knn_cl_quiz <- confusionMatrix(quiz_c, knnN0_Quiz_pred)
+knn_cl_quiz
+```
+
+
+### 3b. Stack the Test Results from each model
+
+For curiosity, we compare the results from each of the models.
+
+```{r, echo=FALSE }
+stackResults = data.frame(
+    knnN0 = knnN0_TEST0_pred,
+    knnMM = knnMM_TEST0_pred,
+    bayes = bayes_TEST0_pred,
+    vgam = vgam_TEST0_pred,
+    lda = lda_TEST0_pred
+)
+stackResults
+```
+
+### 3c. Write answers to file
+
+And we write the answers to the files for submission.
+
+
+```{r, echo=FALSE}
+
+answers = knnN0_TEST0_pred
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+Sys.time()
+```
+
+## 4. References and Links
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. See  http://groupware.les.inf.puc-rio.br/har#ixzz3d4K34xch
+
