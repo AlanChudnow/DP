@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Race Predictor</title>
+  <meta charset="utf-8">
+  <meta name="description" content="Race Predictor">
+  <meta name="author" content="Alan Chudnow">
+  <meta name="generator" content="slidify" />
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta http-equiv="X-UA-Compatible" content="chrome=1">
+  <link rel="stylesheet" href="libraries/frameworks/io2012/css/default.css" media="all" >
+  <link rel="stylesheet" href="libraries/frameworks/io2012/css/phone.css" 
+    media="only screen and (max-device-width: 480px)" >
+  <link rel="stylesheet" href="libraries/frameworks/io2012/css/slidify.css" >
+  <link rel="stylesheet" href="libraries/highlighters/highlight.js/css/tomorrow.css" />
+  <base target="_blank"> <!-- This amazingness opens all links in a new tab. -->  <link rel=stylesheet href="./assets/css/ribbons.css"></link>
+
+  
+  <!-- Grab CDN jQuery, fall back to local if offline -->
+  <script src="http://ajax.aspnetcdn.com/ajax/jQuery/jquery-1.7.min.js"></script>
+  <script>window.jQuery || document.write('<script src="libraries/widgets/quiz/js/jquery.js"><\/script>')</script> 
+  <script data-main="libraries/frameworks/io2012/js/slides" 
+    src="libraries/frameworks/io2012/js/require-1.0.8.min.js">
+  </script>
+  
+  
+
+</head>
+<body style="opacity: 0">
+  <slides class="layout-widescreen">
+    
+    <!-- LOGO SLIDE -->
+        <slide class="title-slide segue nobackground">
+  <hgroup class="auto-fadein">
+    <h1>Race Predictor</h1>
+    <h2>Your pace at the next race</h2>
+    <p>Alan Chudnow<br/>Student</p>
+  </hgroup>
+  <article></article>  
+</slide>
+    
+
+    <!-- SLIDES -->
+    <slide class="class1" id="id1" style="background:;">
+  <hgroup>
+    <h2>Slide 2: Project Summary</h2>
+  </hgroup>
+  <article data-timings="">
+    <ol>
+<li><p>This web app will predict the time to run a race in the future 
+based upon the time it took you to run a race in the past</p></li>
+<li><p>The User Enter
+** Enter Prior Race Distance (meters)
+** Prior Race Time (min)
+** New Race Length (meters).</p></li>
+<li><p>The program calculates</p></li>
+</ol>
+
+<p>** Pace using distance and time
+** Estimates VO2 required to run at pac
+** Estimates % Effort (vs max effort) that most users require to 
+keep going for a race of that length
+** Estimates V02max from VO2 and % Effort
+** Predicts new time by working backwords</p>
+
+<p>--- .class1 #id2</p>
+
+<h2>Equations</h2>
+
+<ul>
+<li><p>V is the velocity of prior run in meters/sec
+(prior race distance in meters)/(prior race time in seconds)</p></li>
+<li><p>Percent max determines the ratio of your effort to the maximum effort.  It is a based upon time.
+Percent_max = 0.8 + 0.1894393 * e<sup>-0.012778 * t</sup> + 0.2989558 * e<sup>-0.1932605 * t</sup></p></li>
+<li><p>VO2 estimates the oxygen input required to sustain the velocity achieved in the prior rate.
+VO2 = -4.60 + 0.182258 * v + 0.000104 * v<sup>2</sup></p></li>
+<li><p>VO2max is an estimate of your ability to intake oxygen and generate power from the prior race.
+VO2MAX = VO2/percent_max</p></li>
+<li><p>New Rate time is t&rsquo; that solves
+VO2MAX = (4.60 + 0.182258 * v&rsquo; + 0.000104 * v&rsquo;<sup>2)</sup>
+/ ( -4.60 + 0.182258 * v&rsquo; + 0.000104 * v&rsquo;<sup>2)</sup></p></li>
+</ul>
+
+<p>where v&#39;; = (new race distance in meters)/(t&#39;; in seconds)</p>
+
+  </article>
+  <!-- Presenter Notes -->
+</slide>
+
+<slide class="class1" id="id2" style="background:;">
+  <hgroup>
+    <h2>R Example</h2>
+  </hgroup>
+  <article data-timings="">
+    <pre><code class="r">    ind &lt;- 5000
+    intm &lt;- 30
+    ints &lt;- 0
+    nDkm &lt;- 10000
+
+    dm &lt;- ind          #Distance in m
+    dkm &lt;- dm/1000.0     #distance in km
+    dmiles &lt;- dkm/1.609  #Distance in miles
+
+    paste(&quot;Race Distance: &quot;,round(dm),&quot; (m) &quot;, round(dmiles,2), &quot; (miles)&quot;, sep=&quot;&quot;)
+</code></pre>
+
+<pre><code>## [1] &quot;Race Distance: 5000 (m) 3.11 (miles)&quot;
+</code></pre>
+
+<pre><code class="r">    tsec &lt;- intm*60 + ints  #Time in Seconds
+    tmin &lt;- tsec/60                   #Time in Minutes
+    th &lt;- tmin/60                     #Time in Hours
+
+    thf &lt;- floor(th)
+    tmf &lt;- floor(tmin - thf*60)
+    tms &lt;- floor(tsec - thf*3600 - tmf*60)
+
+    paste(&quot;Race Time: &quot;,thf, &quot;:&quot; ,tmf, &#39;:&#39;, round(tms,1), sep=&quot;&quot;)
+</code></pre>
+
+<pre><code>## [1] &quot;Race Time: 0:30:0&quot;
+</code></pre>
+
+<pre><code class="r">    vMperS &lt;- dkm*1000.0/tsec           #Velocity in Meters/sec
+    vMperM &lt;- vMperS*60.0               #Velocity in Meters/min
+    vMPH &lt;- vMperS * 2.23694          #Velocity in Miles/hour
+    vMinPerMile &lt;- 1/(vMPH/60.0)        #Velocity in Min Per Mile
+    vMinPerKM &lt;- 1/(vMperS/1000.0*60.0)   #Velocity in Min Per KM
+
+    paste(&quot;Race Pace: &quot;,round(vMperS,2),&quot;(meters/sec)&quot;, round(vMPH,2), &quot;(MPH)&quot;,
+                            round(vMinPerMile,2), &quot;(Min per Mile)&quot;,
+                            round(vMinPerKM,2), &quot;(Min per KM) &quot;,
+                            round(vMperM,2),&quot;(Meters per Min)&quot;,
+                            sep=&quot; &quot;)     
+</code></pre>
+
+<pre><code>## [1] &quot;Race Pace:  2.78 (meters/sec) 6.21 (MPH) 9.66 (Min per Mile) 6 (Min per KM)  166.67 (Meters per Min)&quot;
+</code></pre>
+
+<pre><code class="r">    v &lt;- vMperM
+    vo2 &lt;- -4.60 + 0.182258 * v + 0.000104 * v*v #Vo2 v in meters/min
+
+    paste(&quot;Race vo2: &quot;,round(vo2,1), sep=&quot;&quot;)
+</code></pre>
+
+<pre><code>## [1] &quot;Race vo2: 28.7&quot;
+</code></pre>
+
+<pre><code class="r">    t &lt;-  tmin
+    percent_max &lt;- 0.8 + 0.1894393 * exp(-0.012778 * t) + 
+        0.2989558 * exp(-0.1932605 * t) #t in minutes
+    vo2max &lt;-  vo2/percent_max 
+
+    paste(&quot;Race vo2max: &quot;,round(vo2max,1), sep=&quot;&quot;)
+</code></pre>
+
+<pre><code>## [1] &quot;Race vo2max: 30.8&quot;
+</code></pre>
+
+<pre><code class="r">    nTime = uniroot(  function(t) {
+                            v = (nDkm) / t
+                            v2 &lt;- -4.60 + 0.182258 * v + 0.000104 * v*v
+                            pm &lt;- 0.8 + 0.1894393 * exp(-0.012778 * t) + 
+                                 0.2989558 * exp(-0.1932605 * t) 
+                         return(vo2max - v2/pm)
+                         }, 
+                      c(1,24*60*3), tol=0.001
+                      )
+    paste(&quot;Predicted Race Time: &quot;, round(nTime$root,2), &quot;(min) assuming same V02max&quot;, sep=&quot; &quot;)
+</code></pre>
+
+<pre><code>## [1] &quot;Predicted Race Time:  62.38 (min) assuming same V02max&quot;
+</code></pre>
+
+  </article>
+  <!-- Presenter Notes -->
+</slide>
+
+<slide class="" id="slide-3" style="background:;">
+  <hgroup>
+    <h2>Summary</h2>
+  </hgroup>
+  <article data-timings="">
+    <ol>
+<li>Hope you like it</li>
+</ol>
+
+  </article>
+  <!-- Presenter Notes -->
+</slide>
+
+    <slide class="backdrop"></slide>
+  </slides>
+  <div class="pagination pagination-small" id='io2012-ptoc' style="display:none;">
+    <ul>
+      <li>
+      <a href="#" target="_self" rel='tooltip' 
+        data-slide=1 title='Slide 2: Project Summary'>
+         1
+      </a>
+    </li>
+    <li>
+      <a href="#" target="_self" rel='tooltip' 
+        data-slide=2 title='R Example'>
+         2
+      </a>
+    </li>
+    <li>
+      <a href="#" target="_self" rel='tooltip' 
+        data-slide=3 title='Summary'>
+         3
+      </a>
+    </li>
+  </ul>
+  </div>  <!--[if IE]>
+    <script 
+      src="http://ajax.googleapis.com/ajax/libs/chrome-frame/1/CFInstall.min.js">  
+    </script>
+    <script>CFInstall.check({mode: 'overlay'});</script>
+  <![endif]-->
+</body>
+  <!-- Load Javascripts for Widgets -->
+  
+  <!-- LOAD HIGHLIGHTER JS FILES -->
+  <script src="libraries/highlighters/highlight.js/highlight.pack.js"></script>
+  <script>hljs.initHighlightingOnLoad();</script>
+  <!-- DONE LOADING HIGHLIGHTER JS FILES -->
+   
+  </html>
